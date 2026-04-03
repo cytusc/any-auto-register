@@ -132,6 +132,7 @@
 | SkyMail (CloudMail) | `skymail` | 通过 API / Token / 域名使用 |
 | YYDS Mail / MaliAPI | `maliapi` | 支持域名与自动域名策略 |
 | GPTMail | `gptmail` | 基于 GPTMail API 生成临时邮箱并轮询邮件，支持已知域名时本地拼装随机地址 |
+| OpenTrashMail | `opentrashmail` | 对接自建 OpenTrashMail 服务，支持 `/api/random` 自动取号，也支持配置域名后本地拼装随机地址 |
 | DuckMail | `duckmail` | 临时邮箱方案 |
 | Freemail | `freemail` | 自建邮箱服务 |
 | Laoudo | `laoudo` | 固定邮箱方案 |

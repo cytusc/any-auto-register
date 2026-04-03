@@ -262,6 +262,13 @@ def create_mailbox(
             domain=extra.get("gptmail_domain", ""),
             proxy=proxy,
         )
+    elif provider == "opentrashmail":
+        return OpenTrashMailMailbox(
+            api_url=extra.get("opentrashmail_api_url", ""),
+            domain=extra.get("opentrashmail_domain", ""),
+            password=extra.get("opentrashmail_password", ""),
+            proxy=proxy,
+        )
     elif provider == "cfworker":
         return CFWorkerMailbox(
             api_url=extra.get("cfworker_api_url", ""),
@@ -1293,6 +1300,272 @@ class GPTMailMailbox(BaseMailbox):
                         continue
                     if code:
                         self._log(f"[GPTMail] 收到验证码: {code}")
+                        return code
+            except Exception:
+                pass
+            return None
+
+        return self._run_polling_wait(
+            timeout=timeout,
+            poll_interval=3,
+            poll_once=poll_once,
+        )
+
+
+class OpenTrashMailMailbox(BaseMailbox):
+    """OpenTrashMail 临时邮箱服务"""
+
+    def __init__(
+        self,
+        api_url: str = "",
+        domain: str = "",
+        password: str = "",
+        proxy: str = None,
+    ):
+        self.api = str(api_url or "").strip().rstrip("/")
+        self.domain = self._normalize_domain(domain)
+        self.password = str(password or "").strip()
+        self.proxy = build_requests_proxy_config(proxy)
+
+    @staticmethod
+    def _normalize_domain(value: Any) -> str:
+        domain = str(value or "").strip().lower()
+        if domain.startswith("@"):
+            domain = domain[1:]
+        return domain
+
+    @staticmethod
+    def _generate_local_part() -> str:
+        import string
+
+        prefix = "".join(random.choices(string.ascii_lowercase, k=8))
+        suffix = "".join(random.choices(string.digits, k=2))
+        return f"{prefix}{suffix}"
+
+    def _headers(self) -> dict[str, str]:
+        return {"accept": "application/json, text/plain, */*"}
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        timeout: int = 15,
+    ):
+        import requests
+
+        request_params = dict(params or {})
+        if self.password and "password" not in request_params:
+            request_params["password"] = self.password
+
+        return requests.request(
+            method,
+            f"{self.api}{path}",
+            params=request_params or None,
+            json=None,
+            headers=self._headers(),
+            proxies=self.proxy,
+            timeout=timeout,
+        )
+
+    def _require_api(self) -> None:
+        if not self.api:
+            raise RuntimeError(
+                "OpenTrashMail 未配置 API URL，请检查 opentrashmail_api_url"
+            )
+
+    def _build_email_path(self, email: str) -> str:
+        from urllib.parse import quote
+
+        return quote(str(email or "").strip(), safe="@")
+
+    def _parse_random_email(self, html_text: str) -> str:
+        import re
+
+        text = str(html_text or "")
+        if not text:
+            return ""
+
+        match = re.search(r"/address/([^\"'<>\s]+@[^\"'<>\s]+)", text, re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip()
+
+        match = re.search(
+            r"([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})",
+            text,
+            re.IGNORECASE,
+        )
+        if match:
+            return str(match.group(1) or "").strip()
+        return ""
+
+    def _list_messages(self, email: str) -> list[dict[str, Any]]:
+        self._require_api()
+        response = self._request(
+            "GET",
+            f"/json/{self._build_email_path(email)}",
+            timeout=10,
+        )
+        if response.status_code == 404:
+            return []
+        try:
+            payload = response.json()
+        except Exception as exc:
+            preview = (response.text or "")[:200]
+            raise RuntimeError(
+                f"OpenTrashMail 收件箱返回非 JSON: HTTP {response.status_code} {preview}"
+            ) from exc
+
+        if response.status_code >= 400:
+            if isinstance(payload, dict) and payload.get("error"):
+                error = payload.get("error")
+            else:
+                error = response.text or f"HTTP {response.status_code}"
+            raise RuntimeError(f"OpenTrashMail 收件箱查询失败: {str(error).strip()}")
+
+        if not payload:
+            return []
+
+        messages: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for message_id, item in payload.items():
+                if not isinstance(item, dict):
+                    continue
+                message = dict(item)
+                message.setdefault("id", str(message_id))
+                messages.append(message)
+        elif isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    messages.append(item)
+        return messages
+
+    def _get_message_detail(self, email: str, message_id: str) -> dict[str, Any]:
+        self._require_api()
+        response = self._request(
+            "GET",
+            f"/json/{self._build_email_path(email)}/{message_id}",
+            timeout=10,
+        )
+        if response.status_code == 404:
+            return {}
+        try:
+            payload = response.json()
+        except Exception as exc:
+            preview = (response.text or "")[:200]
+            raise RuntimeError(
+                f"OpenTrashMail 邮件详情返回非 JSON: HTTP {response.status_code} {preview}"
+            ) from exc
+
+        if response.status_code >= 400:
+            if isinstance(payload, dict) and payload.get("error"):
+                error = payload.get("error")
+            else:
+                error = response.text or f"HTTP {response.status_code}"
+            raise RuntimeError(f"OpenTrashMail 邮件详情查询失败: {str(error).strip()}")
+
+        return payload if isinstance(payload, dict) else {}
+
+    def get_email(self) -> MailboxAccount:
+        if self.domain:
+            email = f"{self._generate_local_part()}@{self.domain}"
+            self._log(f"[OpenTrashMail] 本地拼装邮箱: {email}")
+            return MailboxAccount(
+                email=email,
+                account_id=email,
+                extra={
+                    "provider": "opentrashmail",
+                    "domain": self.domain,
+                    "local_address": True,
+                },
+            )
+
+        self._require_api()
+        response = self._request("GET", "/api/random", timeout=15)
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"OpenTrashMail 随机邮箱生成失败: HTTP {response.status_code}"
+            )
+
+        email = self._parse_random_email(response.text)
+        if not email:
+            preview = (response.text or "")[:200]
+            raise RuntimeError(f"OpenTrashMail 未能解析随机邮箱: {preview}")
+
+        self._log(f"[OpenTrashMail] 生成邮箱: {email}")
+        return MailboxAccount(
+            email=email,
+            account_id=email,
+            extra={"provider": "opentrashmail"},
+        )
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            return {
+                str(message.get("id"))
+                for message in self._list_messages(account.email)
+                if message.get("id") is not None
+            }
+        except Exception:
+            return set()
+
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+        **kwargs,
+    ) -> str:
+        import re
+
+        seen = {str(mid) for mid in (before_ids or set())}
+        exclude_codes = {
+            str(code) for code in (kwargs.get("exclude_codes") or set()) if code
+        }
+
+        def poll_once() -> Optional[str]:
+            try:
+                messages = self._list_messages(account.email)
+                for message in messages:
+                    message_id = str(message.get("id") or "").strip()
+                    if not message_id or message_id in seen:
+                        continue
+                    seen.add(message_id)
+
+                    detail = self._get_message_detail(account.email, message_id)
+                    parsed = detail.get("parsed") if isinstance(detail, dict) else {}
+                    if not isinstance(parsed, dict):
+                        parsed = {}
+
+                    decoded_raw = self._decode_raw_content(detail.get("raw") or "")
+                    search_text = " ".join(
+                        [
+                            str(message.get("subject") or ""),
+                            str(message.get("from") or ""),
+                            str(message.get("body") or ""),
+                            str(detail.get("from") or ""),
+                            str(parsed.get("subject") or ""),
+                            str(parsed.get("body") or ""),
+                            str(parsed.get("htmlbody") or ""),
+                            decoded_raw,
+                        ]
+                    ).strip()
+                    search_text = re.sub(
+                        r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+                        "",
+                        search_text,
+                    )
+                    if keyword and keyword.lower() not in search_text.lower():
+                        continue
+
+                    code = self._safe_extract(search_text, code_pattern)
+                    if code and code in exclude_codes:
+                        continue
+                    if code:
+                        self._log(f"[OpenTrashMail] 收到验证码: {code}")
                         return code
             except Exception:
                 pass
