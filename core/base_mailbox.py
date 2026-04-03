@@ -1558,7 +1558,7 @@ class CFWorkerMailbox(BaseMailbox):
         seen = set(before_ids or [])
         exclude_codes = set(kwargs.get("exclude_codes") or [])
         otp_sent_at = kwargs.get("otp_sent_at")
-        otp_cutoff = float(otp_sent_at) - 2 if otp_sent_at else None
+        otp_cutoff = float(otp_sent_at) - 60 if otp_sent_at else None
 
         def poll_once() -> Optional[str]:
             try:
@@ -1580,6 +1580,7 @@ class CFWorkerMailbox(BaseMailbox):
                                 self._log(
                                     f"[CFWorker] \u8df3\u8fc7\u65e7\u90ae\u4ef6 id={mid} created_at={created_at}"
                                 )
+                                seen.add(mid)  # 标记为已处理，避免下次轮询重复跳过
                                 continue
                         except Exception:
                             pass
