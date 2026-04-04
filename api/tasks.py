@@ -169,8 +169,6 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
     success = 0
     skipped = 0
     errors = []
-    start_gate_lock = threading.Lock()
-    next_start_time = time.time()
 
     def _sleep_with_control(
         wait_seconds: float,
@@ -201,7 +199,6 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             )
 
         def _do_one(i: int):
-            nonlocal next_start_time
             proxy_pool = None
             _proxy = None
             current_email = req.email or ""
@@ -216,21 +213,6 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 if not _proxy:
                     _proxy = proxy_pool.get_next()
                 _proxy = normalize_proxy_url(_proxy)
-                if req.register_delay_seconds > 0:
-                    with start_gate_lock:
-                        control.checkpoint(attempt_id=attempt_id)
-                        now = time.time()
-                        wait_seconds = max(0.0, next_start_time - now)
-                        if wait_seconds > 0:
-                            _log(
-                                task_id,
-                                f"第 {i + 1} 个账号启动前延迟 {wait_seconds:g} 秒",
-                            )
-                            _sleep_with_control(
-                                wait_seconds,
-                                attempt_id=attempt_id,
-                            )
-                        next_start_time = time.time() + req.register_delay_seconds
                 control.checkpoint(attempt_id=attempt_id)
                 from core.config_store import config_store
 
@@ -330,8 +312,22 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
 
         max_workers = min(req.concurrency, req.count, 500)
         stopped = False
+        batch_size = max_workers
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_do_one, i) for i in range(req.count)]
+            all_futures = []
+            for batch_start in range(0, req.count, batch_size):
+                batch_end = min(batch_start + batch_size, req.count)
+                batch_num = batch_start // batch_size + 1
+                if batch_start > 0 and req.register_delay_seconds > 0:
+                    _log(
+                        task_id,
+                        f"批次 {batch_num} 延迟 {req.register_delay_seconds}s 后启动 "
+                        f"(任务 {batch_start + 1}-{batch_end})",
+                    )
+                    _sleep_with_control(req.register_delay_seconds)
+                for i in range(batch_start, batch_end):
+                    all_futures.append(pool.submit(_do_one, i))
+            futures = all_futures
             for f in as_completed(futures):
                 try:
                     result = f.result()
