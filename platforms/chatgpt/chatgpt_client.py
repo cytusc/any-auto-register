@@ -18,7 +18,11 @@ except ImportError:
     sys.exit(1)
 
 from .sentinel_token import build_sentinel_token
-from .sentinel_browser import get_sentinel_token_via_browser
+from .sentinel_browser import (
+    get_sentinel_token_via_browser,
+    get_sentinel_tokens_batch,
+    SentinelBatchTokens,
+)
 from .utils import (
     FlowState,
     build_browser_headers,
@@ -130,21 +134,56 @@ class ChatGPTClient:
         # 设置 oai-did cookie
         seed_oai_device_cookie(self.session, self.device_id)
         self.last_registration_state = FlowState()
+        self._sentinel_batch_cache: SentinelBatchTokens | None = None
 
-    def _get_sentinel_token(self, flow: str, *, page_url: str | None = None):
-        prefer_browser = flow in {"username_password_create", "oauth_create_account"}
-        if prefer_browser:
-            token = get_sentinel_token_via_browser(
-                flow=flow,
+    def _ensure_sentinel_batch(self) -> SentinelBatchTokens | None:
+        if self._sentinel_batch_cache is not None:
+            return self._sentinel_batch_cache
+        try:
+            batch = get_sentinel_tokens_batch(
                 proxy=self.proxy,
-                page_url=page_url,
                 headless=self.browser_mode != "headed",
                 device_id=self.device_id,
                 log_fn=lambda msg: self._log(msg),
             )
+            self._sentinel_batch_cache = batch
+            if not batch.has_errors:
+                self._log(
+                    f"Sentinel 批量 token 缓存就绪: {', '.join(batch.success_flows)} "
+                    f"({batch.elapsed_seconds:.1f}s)"
+                )
+            else:
+                ok = batch.success_flows
+                fail = list(batch.errors.keys())
+                self._log(
+                    f"Sentinel 批量 token 部分成功: 成功={ok}, 失败={fail}"
+                )
+            return batch
+        except Exception as e:
+            self._log(f"Sentinel 批量获取异常: {e}")
+            return None
+
+    def _get_sentinel_token(self, flow: str, *, page_url: str | None = None):
+        batch = self._ensure_sentinel_batch()
+        if batch:
+            token = batch.get_token(flow)
             if token:
-                self._log(f"{flow}: 已通过 Playwright SentinelSDK 获取 token")
+                self._log(f"{flow}: 已从批量缓存获取 token (含 p/t/c)")
                 return token
+            if flow in batch.errors:
+                self._log(f"{flow}: 批量模式失败 ({batch.errors[flow]}), 尝试单 flow 回退")
+
+        token = get_sentinel_token_via_browser(
+            flow=flow,
+            proxy=self.proxy,
+            page_url=page_url,
+            headless=self.browser_mode != "headed",
+            device_id=self.device_id,
+            log_fn=lambda msg: self._log(msg),
+        )
+        if token:
+            self._log(f"{flow}: 已通过 Playwright 单 flow 模式获取 token")
+            return token
 
         token = build_sentinel_token(
             self.session,
@@ -155,7 +194,7 @@ class ChatGPTClient:
             impersonate=self.impersonate,
         )
         if token:
-            self._log(f"{flow}: 已通过 HTTP PoW 获取 token")
+            self._log(f"{flow}: 已通过 HTTP PoW 获取 token (t 字段为空)")
         return token
 
     def _log(self, msg):

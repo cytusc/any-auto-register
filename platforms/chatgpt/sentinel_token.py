@@ -1,5 +1,9 @@
 """
-Sentinel Token 生成器模块（纯 Python 方案）。
+Sentinel Token 生成器模块（纯 Python 方案 + HTTP API 获取 c 字段）。
+
+注意：OpenAI Sentinel SDK 已升级到 20260219f9f6，新增 Turnstile VM 验证。
+纯 Python 方式生成的 token 中 t 字段为空串，仅适用于不需要 Turnstile 的场景。
+需要完整 p/t/c 三字段的场景请使用 sentinel_browser / sentinel_batch 的 Playwright 模式。
 """
 
 import base64
@@ -7,19 +11,24 @@ import json
 import random
 import time
 import uuid
+from datetime import datetime, timezone, timedelta
 
 
 SENTINEL_REQ_URL = "https://sentinel.openai.com/backend-api/sentinel/req"
 SENTINEL_REFERER = "https://sentinel.openai.com/backend-api/sentinel/frame.html"
 
+SDK_VERSION = "20260219f9f6"
+SDK_URL = f"https://sentinel.openai.com/sentinel/{SDK_VERSION}/sdk.js"
+
 
 class SentinelTokenGenerator:
     """
-    Sentinel Token 纯 Python 生成器。
+    Sentinel Token 纯 Python 生成器（SDK 20260219f9f6 版本）。
 
     说明：
     - 该实现不依赖 Node / JS。
-    - t 字段按当前纯 Python 方案固定空串，由上游接口判定可用性。
+    - t 字段按当前纯 Python 方案固定空串（Turnstile VM 无法纯 HTTP 模拟）。
+    - config 数组已更新为 25 元素（新版 SDK 要求）。
     """
 
     MAX_ATTEMPTS = 500000
@@ -30,7 +39,7 @@ class SentinelTokenGenerator:
         self.user_agent = user_agent or (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/145.0.0.0 Safari/537.36"
+            "Chrome/136.0.7103.92 Safari/537.36"
         )
         self.requirements_seed = str(random.random())
         self.sid = str(uuid.uuid4())
@@ -49,57 +58,65 @@ class SentinelTokenGenerator:
         return format(h & 0xFFFFFFFF, "08x")
 
     def _get_config(self):
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc)
-        date_str = now.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)")
+        now = datetime.now()
+        utc_offset = now.astimezone().utcoffset()
+        offset_hours = int(utc_offset.total_seconds() // 3600) if utc_offset else 0
+        offset_minutes = int((abs(utc_offset.total_seconds()) % 3600) // 60) if utc_offset else 0
+        sign = "+" if offset_hours >= 0 else "-"
+        tz_str = f"GMT{sign}{abs(offset_hours):02d}{offset_minutes:02d}"
+        tz_names = {
+            8: "中国标准时间",
+            0: "Coordinated Universal Time",
+            -5: "Eastern Standard Time",
+            -8: "Pacific Standard Time",
+        }
+        tz_name = tz_names.get(offset_hours, "Coordinated Universal Time")
+        date_str = now.strftime(f"%a %b %d %Y %H:%M:%S {tz_str} ({tz_name})")
         perf_now = random.uniform(1000, 50000)
         time_origin = time.time() * 1000 - perf_now
-        nav_prop = random.choice(
-            [
-                "vendorSub",
-                "productSub",
-                "vendor",
-                "maxTouchPoints",
-                "scheduling",
-                "userActivation",
-                "doNotTrack",
-                "geolocation",
-                "connection",
-                "plugins",
-                "mimeTypes",
-                "pdfViewerEnabled",
-                "webkitTemporaryStorage",
-                "webkitPersistentStorage",
-                "hardwareConcurrency",
-                "cookieEnabled",
-                "credentials",
-                "mediaDevices",
-                "permissions",
-                "locks",
-                "ink",
-            ]
-        )
+        nav_prop_values = [
+            "windowControlsOverlay\u2212[object WindowControlsOverlay]",
+            "scheduling\u2212[object Scheduling]",
+            "pdfViewerEnabled\u2212true",
+            "hardwareConcurrency\u221216",
+            "deviceMemory\u22128",
+            "maxTouchPoints\u22120",
+            "cookieEnabled\u2212true",
+            "vendor\u2212Google Inc.",
+            "language\u2212en-US",
+            "onLine\u2212true",
+            "webdriver\u2212false",
+        ]
         return [
-            "1920x1080",
+            random.choice([2560, 2667, 2745, 2880, 3000, 2200, 2160]),
             date_str,
-            4294705152,
+            4294967296,
             random.random(),
             self.user_agent,
-            "https://sentinel.openai.com/sentinel/20260124ceb8/sdk.js",
+            SDK_URL,
             None,
-            None,
+            random.choice(["en-US", "zh-CN", "en"]),
             "en-US",
             "en-US,en",
             random.random(),
-            f"{nav_prop}−undefined",
+            random.choice(nav_prop_values),
             random.choice(["location", "implementation", "URL", "documentURI", "compatMode"]),
-            random.choice(["Object", "Function", "Array", "Number", "parseFloat", "undefined"]),
+            random.choice([
+                "__oai_so_bm", "__oai_logHTML", "__NEXT_DATA__",
+                "__next_f", "__oai_SSR_TTI", "__oai_SSR_HTML",
+                "__reactEvents", "__RUNTIME_CONFIG__",
+            ]),
             perf_now,
             self.sid,
             "",
             random.choice([4, 8, 12, 16]),
             time_origin,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
         ]
 
     @staticmethod
@@ -155,9 +172,9 @@ def fetch_sentinel_challenge(
         "Accept-Encoding": "gzip, deflate, br, zstd",
         "Referer": SENTINEL_REFERER,
         "Origin": "https://sentinel.openai.com",
-        "User-Agent": user_agent or "Mozilla/5.0",
+        "User-Agent": user_agent or generator.user_agent,
         "sec-ch-ua": sec_ch_ua
-        or '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+        or '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "Sec-Fetch-Dest": "empty",
