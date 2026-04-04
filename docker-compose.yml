@@ -30,4 +30,11 @@ services:
       - ${APP_RUNTIME_BIND:-./data}:/runtime
       - ${APP_EXT_TARGETS_BIND:-./_ext_targets}:/_ext_targets
       - ${APP_EXTERNAL_LOGS_BIND:-./external_logs}:/app/services/external_logs
+      - ${APP_LOGS_BIND:-./logs}:/app/logs
     shm_size: "1gb"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+        labels: "service=any-auto-register"
