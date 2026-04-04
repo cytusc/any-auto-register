@@ -2369,12 +2369,12 @@ class OAuthClient:
             otp_wait_seconds = int(
                 self.config.get(
                     "chatgpt_oauth_otp_wait_seconds",
-                    self.config.get("chatgpt_otp_wait_seconds", 600),
+                    self.config.get("chatgpt_otp_wait_seconds", 120),
                 )
-                or 600
+                or 120
             )
         except Exception:
-            otp_wait_seconds = 600
+            otp_wait_seconds = 120
         otp_wait_seconds = max(30, min(otp_wait_seconds, 3600))
         otp_poll_window = min(30, max(10, otp_wait_seconds))
         try:

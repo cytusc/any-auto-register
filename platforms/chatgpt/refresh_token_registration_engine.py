@@ -313,7 +313,7 @@ class RefreshTokenRegistrationEngine:
         register_otp_wait_seconds = self._read_int_config(
             "chatgpt_register_otp_wait_seconds",
             fallback_keys=("chatgpt_otp_wait_seconds",),
-            default=600,
+            default=120,
             minimum=30,
             maximum=3600,
         )
