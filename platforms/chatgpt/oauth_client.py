@@ -983,17 +983,30 @@ class OAuthClient:
             self._set_error("about_you 资料不完整: 缺少姓名或生日")
             return None
 
-        sentinel_token = build_sentinel_token(
-            self.session,
-            device_id,
+        sentinel_token = get_sentinel_token_via_browser(
             flow="oauth_create_account",
-            user_agent=user_agent,
-            sec_ch_ua=sec_ch_ua,
-            impersonate=impersonate,
+            proxy=self.proxy,
+            page_url=referer or f"{self.oauth_issuer}/about-you",
+            headless=self.browser_mode != "headed",
+            device_id=device_id,
+            log_fn=lambda msg: self._log(msg),
         )
-        if not sentinel_token:
-            self._set_error("无法获取 sentinel token (oauth_create_account)")
-            return None
+        if sentinel_token:
+            self._log("oauth_create_account: 已通过 Playwright SentinelSDK 获取 token")
+        else:
+            sentinel_token = build_sentinel_token(
+                self.session,
+                device_id,
+                flow="oauth_create_account",
+                user_agent=user_agent,
+                sec_ch_ua=sec_ch_ua,
+                impersonate=impersonate,
+            )
+            if sentinel_token:
+                self._log("oauth_create_account: 已通过 HTTP PoW 获取 token (t 字段为空)")
+            else:
+                self._set_error("无法获取 sentinel token (oauth_create_account)")
+                return None
 
         request_url = f"{self.oauth_issuer}/api/accounts/create_account"
         headers = self._headers(
