@@ -52,6 +52,24 @@ class ChatGPTPlatform(BasePlatform):
         except Exception:
             max_retries = 3
 
+        def _resolve_mailbox_timeout(requested_timeout: int) -> int:
+            candidates = (
+                extra_config.get("mailbox_otp_timeout_seconds"),
+                extra_config.get("email_otp_timeout_seconds"),
+                extra_config.get("otp_timeout"),
+                requested_timeout,
+            )
+            for value in candidates:
+                if value in (None, ""):
+                    continue
+                try:
+                    seconds = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if seconds > 0:
+                    return seconds
+            return requested_timeout
+
         if self.mailbox:
             _mailbox = self.mailbox
             _fixed_email = email
@@ -100,7 +118,7 @@ class ChatGPTPlatform(BasePlatform):
                     return _mailbox.wait_for_code(
                         self._acct,
                         keyword="",
-                        timeout=timeout,
+                        timeout=_resolve_mailbox_timeout(timeout),
                         before_ids=self._before_ids,
                         otp_sent_at=otp_sent_at,
                         exclude_codes=exclude_codes,
@@ -148,7 +166,7 @@ class ChatGPTPlatform(BasePlatform):
                     return _tmail.wait_for_code(
                         self._acct,
                         keyword="",
-                        timeout=timeout,
+                        timeout=_resolve_mailbox_timeout(timeout),
                         before_ids=self._before_ids,
                         otp_sent_at=otp_sent_at,
                         exclude_codes=exclude_codes,

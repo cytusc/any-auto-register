@@ -669,7 +669,7 @@ class ChatGPTClient:
             self._log(f"注册异常: {e}")
             return False, str(e)
 
-    def send_email_otp(self):
+    def send_email_otp(self, referer=None):
         """触发发送邮箱验证码"""
         self._log("触发发送验证码...")
         url = f"{self.AUTH}/api/accounts/email-otp/send"
@@ -681,13 +681,28 @@ class ChatGPTClient:
                 headers=self._headers(
                     url,
                     accept="application/json, text/plain, */*",
-                    referer=f"{self.AUTH}/create-account/password",
+                    referer=referer or f"{self.AUTH}/create-account/password",
                     fetch_site="same-origin",
                 ),
                 allow_redirects=True,
                 timeout=30,
             )
-            return r.status_code == 200
+            self._log(f"验证码发送状态: {r.status_code}")
+            if r.status_code != 200:
+                self._log(f"验证码发送失败响应: {r.text[:180]}")
+                return False
+
+            try:
+                payload = r.json()
+            except Exception:
+                payload = {}
+
+            if isinstance(payload, dict) and payload:
+                next_state = self._state_from_payload(payload, current_url=str(r.url) or url)
+                self._log(f"验证码发送响应: {describe_flow_state(next_state)}")
+            else:
+                self._log("验证码发送响应: 非 JSON（按已触发处理）")
+            return True
         except Exception as e:
             self._log(f"发送验证码失败: {e}")
             return False
@@ -800,16 +815,40 @@ class ChatGPTClient:
                 self._log(f"账号创建成功 {describe_flow_state(next_state)}")
                 return (True, next_state) if return_state else (True, "账号创建成功")
             else:
+                error_code = ""
                 error_msg = r.text[:200]
-                self._log(f"创建失败: {r.status_code} - {error_msg}")
-                return False, f"HTTP {r.status_code}"
+                try:
+                    error_data = r.json() or {}
+                    error_info = error_data.get("error") or {}
+                    error_code = str(error_info.get("code") or "").strip()
+                    error_msg = str(error_info.get("message") or error_msg).strip()
+                except Exception:
+                    pass
+
+                detail = f"HTTP {r.status_code}"
+                if error_code:
+                    detail += f": {error_code}"
+                elif error_msg:
+                    detail += f": {error_msg}"
+
+                self._log(f"创建失败: {detail} - {error_msg[:200]}")
+                return False, detail
 
         except Exception as e:
             self._log(f"创建异常: {e}")
             return False, str(e)
 
     def register_complete_flow(
-        self, email, password, first_name, last_name, birthdate, skymail_client
+        self,
+        email,
+        password,
+        first_name,
+        last_name,
+        birthdate,
+        skymail_client,
+        stop_before_about_you_submission=False,
+        otp_wait_timeout=600,
+        otp_resend_wait_timeout=300,
     ):
         """
         完整的注册流程（基于原版 run_register 方法）
@@ -826,6 +865,21 @@ class ChatGPTClient:
             tuple: (success, message)
         """
         from urllib.parse import urlparse
+
+        self._log(
+            "注册状态机参数: "
+            f"stop_before_about_you_submission={'on' if stop_before_about_you_submission else 'off'}, "
+            f"otp_wait_timeout={otp_wait_timeout}s, otp_resend_wait_timeout={otp_resend_wait_timeout}s"
+        )
+
+        try:
+            otp_wait_timeout = max(30, int(otp_wait_timeout or 600))
+        except Exception:
+            otp_wait_timeout = 600
+        try:
+            otp_resend_wait_timeout = max(30, int(otp_resend_wait_timeout or 300))
+        except Exception:
+            otp_resend_wait_timeout = 300
 
         max_auth_attempts = 3
         final_url = ""
@@ -885,9 +939,15 @@ class ChatGPTClient:
         account_created = False
         seen_states = {}
 
+        otp_send_attempts = 0
+
         for _ in range(12):
             signature = self._state_signature(state)
             seen_states[signature] = seen_states.get(signature, 0) + 1
+            self._log(
+                f"注册状态推进: step={sum(seen_states.values())} "
+                f"state={describe_flow_state(state)} seen={seen_states[signature]}"
+            )
             if seen_states[signature] > 2:
                 return False, f"注册状态卡住: {describe_flow_state(state)}"
 
@@ -904,14 +964,38 @@ class ChatGPTClient:
                 if not success:
                     return False, f"注册失败: {msg}"
                 register_submitted = True
-                if not self.send_email_otp():
+                otp_send_attempts += 1
+                self._log(f"发送注册验证码: attempt={otp_send_attempts}")
+                if not self.send_email_otp(
+                    referer=state.current_url or state.continue_url or f"{self.AUTH}/create-account/password"
+                ):
                     self._log("发送验证码接口返回失败，继续等待邮箱中的验证码...")
+                else:
+                    self._log("发送注册验证码成功，进入收码阶段")
                 state = self._state_from_url(f"{self.AUTH}/email-verification")
                 continue
 
             if self._state_is_email_otp(state):
                 self._log("等待邮箱验证码...")
-                otp_code = skymail_client.wait_for_verification_code(email, timeout=90)
+                otp_code = skymail_client.wait_for_verification_code(
+                    email, timeout=otp_wait_timeout
+                )
+                if not otp_code:
+                    self._log(
+                        "首次等待未收到验证码，尝试重发一次 email-otp/send "
+                        f"后再等待 {otp_resend_wait_timeout}s"
+                    )
+                    otp_send_attempts += 1
+                    resend_ok = self.send_email_otp(
+                        referer=state.current_url or state.continue_url or f"{self.AUTH}/email-verification"
+                    )
+                    if resend_ok:
+                        self._log(f"重发验证码成功: attempt={otp_send_attempts}")
+                    else:
+                        self._log(f"重发验证码失败: attempt={otp_send_attempts}")
+                    otp_code = skymail_client.wait_for_verification_code(
+                        email, timeout=otp_resend_wait_timeout
+                    )
                 if not otp_code:
                     return False, "未收到验证码"
 
@@ -924,6 +1008,13 @@ class ChatGPTClient:
                 continue
 
             if self._state_is_about_you(state):
+                if stop_before_about_you_submission:
+                    self.last_registration_state = state
+                    self._log(
+                        "注册链路已到 about_you，按 interrupt 流程停止。"
+                        "下一步交由 OAuth 新会话提交姓名+生日。"
+                    )
+                    return True, "pending_about_you_submission"
                 if account_created:
                     return False, "填写信息阶段重复进入"
                 success, next_state = self.create_account(

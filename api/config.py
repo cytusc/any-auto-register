@@ -21,15 +21,28 @@ CONFIG_KEYS = [
     "freemail_admin_token",
     "freemail_username",
     "freemail_password",
+    "freemail_domain",
     "moemail_api_url",
+    "moemail_api_key",
     "skymail_api_base",
     "skymail_token",
     "skymail_domain",
+    "cloudmail_api_base",
+    "cloudmail_admin_email",
+    "cloudmail_admin_password",
+    "cloudmail_domain",
+    "cloudmail_subdomain",
+    "cloudmail_timeout",
     "mail_provider",
+    "mailbox_otp_timeout_seconds",
     "maliapi_base_url",
     "maliapi_api_key",
     "maliapi_domain",
     "maliapi_auto_domain_strategy",
+    "applemail_base_url",
+    "applemail_pool_dir",
+    "applemail_pool_file",
+    "applemail_mailboxes",
     "gptmail_base_url",
     "gptmail_api_key",
     "gptmail_domain",
@@ -85,11 +98,24 @@ class ConfigUpdate(BaseModel):
     data: dict
 
 
+class AppleMailImportRequest(BaseModel):
+    content: str
+    filename: str = ""
+    pool_dir: str = ""
+    bind_to_config: bool = True
+
+
 @router.get("")
 def get_config():
     all_cfg = config_store.get_all()
     if not all_cfg.get("mail_provider"):
         all_cfg["mail_provider"] = "luckmail"
+    if not all_cfg.get("applemail_base_url"):
+        all_cfg["applemail_base_url"] = "https://www.appleemail.top"
+    if not all_cfg.get("applemail_pool_dir"):
+        all_cfg["applemail_pool_dir"] = "mail"
+    if not all_cfg.get("applemail_mailboxes"):
+        all_cfg["applemail_mailboxes"] = "INBOX,Junk"
     if not all_cfg.get("gptmail_base_url"):
         all_cfg["gptmail_base_url"] = "https://mail.chatgpt.org.uk"
     if not all_cfg.get("luckmail_base_url"):
@@ -104,3 +130,64 @@ def update_config(body: ConfigUpdate):
     safe = {k: v for k, v in body.data.items() if k in CONFIG_KEYS}
     config_store.set_many(safe)
     return {"ok": True, "updated": list(safe.keys())}
+
+
+@router.post("/applemail/import")
+def import_applemail_pool(body: AppleMailImportRequest):
+    from core.applemail_pool import load_applemail_pool_snapshot, save_applemail_pool_json
+
+    pool_dir = str(body.pool_dir or config_store.get("applemail_pool_dir", "mail")).strip() or "mail"
+    result = save_applemail_pool_json(
+        body.content,
+        pool_dir=pool_dir,
+        filename=body.filename,
+    )
+
+    if body.bind_to_config:
+        config_store.set_many(
+            {
+                "applemail_pool_dir": pool_dir,
+                "applemail_pool_file": result["filename"],
+            }
+        )
+
+    snapshot = load_applemail_pool_snapshot(
+        pool_file=result["filename"],
+        pool_dir=pool_dir,
+    )
+
+    return {
+        **result,
+        "pool_dir": pool_dir,
+        "bound_to_config": body.bind_to_config,
+        "items": snapshot["items"],
+        "truncated": snapshot["truncated"],
+    }
+
+
+@router.get("/applemail/pool")
+def get_applemail_pool_snapshot(
+    pool_dir: str = "",
+    pool_file: str = "",
+):
+    from core.applemail_pool import load_applemail_pool_snapshot
+
+    resolved_pool_dir = str(pool_dir or config_store.get("applemail_pool_dir", "mail")).strip() or "mail"
+    resolved_pool_file = str(pool_file or config_store.get("applemail_pool_file", "")).strip()
+    try:
+        snapshot = load_applemail_pool_snapshot(
+            pool_file=resolved_pool_file,
+            pool_dir=resolved_pool_dir,
+        )
+    except Exception:
+        snapshot = {
+            "filename": resolved_pool_file,
+            "path": "",
+            "count": 0,
+            "items": [],
+            "truncated": False,
+        }
+    return {
+        **snapshot,
+        "pool_dir": resolved_pool_dir,
+    }

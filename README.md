@@ -33,7 +33,19 @@
 
 ## 项目简介
 
-本项目基于 [lxf746/any-auto-register](https://github.com/lxf746/any-auto-register.git) 二次开发
+本仓库当前直接维护在 [Cong0707/any-auto-register](https://github.com/Cong0707/any-auto-register)。
+
+代码基线主要同步自 [zc-zhangchen/any-auto-register](https://github.com/zc-zhangchen/any-auto-register)，更早的历史来源追溯到 [lxf746/any-auto-register](https://github.com/lxf746/any-auto-register.git)。
+
+### 项目沿袭与改动来源
+
+- 基础框架、平台插件体系、Web UI 与任务调度能力，沿袭自 `lxf746/any-auto-register` 和后续的 `zc-zhangchen/any-auto-register` 历史演进。
+- Cloudflare Worker 临时邮箱接入思路，来源于 [dreamhunter2333/cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email)。
+- 当前分支上的 ChatGPT 注册链路修复，主要来自对 `dsclca12/auto_reg` 在 `2026-04-03` 的相关提交对比后手工缝合，而不是直接整体搬运。对应参考包括：
+- `1b94a1f`：提交前预热页面、补 Cloudflare Cookie、增加自然延迟、修正 headless 行为。
+- `663d39a`：验证码校验前的人类行为模拟，以及 `add_phone` / OTP 阶段的重试思路。
+- `6d64389`：`about_you` 页面访问补 Cookie、workspace 获取补链路、验证码等待时间调整。
+- 本仓库在此基础上另外加入了本地改动：`Browser -> VM` 的 Sentinel 重试顺序、`user_already_exists` 后切换验证码登录、上一枚 OTP 优先复用、consent HTML 中的 workspace 抽取日志与回退逻辑。
 
 ## 当前界面与实际平台展示
 
@@ -130,11 +142,12 @@
 | MoeMail | `moemail` | 默认常用方案，自动注册账号并生成邮箱 |
 | TempMail.lol | `tempmail_lol` | 临时邮箱方案，部分地区可能需要代理 |
 | SkyMail (CloudMail) | `skymail` | 通过 API / Token / 域名使用 |
+| CloudMail (genToken) | `cloudmail` | 通过管理员邮箱/口令获取 token，直接轮询 `emailList` |
 | YYDS Mail / MaliAPI | `maliapi` | 支持域名与自动域名策略 |
 | GPTMail | `gptmail` | 基于 GPTMail API 生成临时邮箱并轮询邮件，支持已知域名时本地拼装随机地址 |
 | OpenTrashMail | `opentrashmail` | 对接自建 OpenTrashMail 服务，支持 `/api/random` 自动取号，也支持配置域名后本地拼装随机地址 |
 | DuckMail | `duckmail` | 临时邮箱方案 |
-| Freemail | `freemail` | 自建邮箱服务 |
+| Freemail | `freemail` | 自建邮箱服务，支持指定域名生成 |
 | Laoudo | `laoudo` | 固定邮箱方案 |
 | CF Worker | `cfworker` | Cloudflare Worker 自建邮箱 |
 
@@ -534,10 +547,10 @@ MIT License — 仅供学习研究，禁止商业使用。
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=zc-zhangchen%2Fany-auto-register&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=Cong0707%2Fany-auto-register&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=zc-zhangchen/any-auto-register&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=zc-zhangchen/any-auto-register&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=zc-zhangchen/any-auto-register&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=Cong0707/any-auto-register&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=Cong0707/any-auto-register&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=Cong0707/any-auto-register&type=date&legend=top-left" />
  </picture>
 </a>

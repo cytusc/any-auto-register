@@ -97,6 +97,28 @@ class ChatGPTPluginTests(unittest.TestCase):
         self.assertEqual(kwargs.get("otp_sent_at"), 123.0)
         self.assertEqual(kwargs.get("exclude_codes"), {"654321"})
 
+    def test_custom_provider_prefers_configured_mailbox_timeout(self):
+        mailbox = _TrackingMailbox()
+        platform = ChatGPTPlatform(
+            config=RegisterConfig(
+                extra={
+                    "chatgpt_registration_mode": "refresh_token",
+                    "mailbox_otp_timeout_seconds": 90,
+                }
+            ),
+            mailbox=mailbox,
+        )
+        adapter = _VerificationAdapter()
+
+        with mock.patch(
+            "platforms.chatgpt.plugin.build_chatgpt_registration_mode_adapter",
+            return_value=adapter,
+        ):
+            platform.register()
+
+        _, kwargs = mailbox.wait_call
+        self.assertEqual(kwargs.get("timeout"), 90)
+
 
 if __name__ == "__main__":
     unittest.main()
