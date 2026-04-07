@@ -2371,10 +2371,10 @@ class CFWorkerMailbox(BaseMailbox):
     def _generate_local_part(self) -> str:
         import string
 
-        # 避免纯数字开头，提高邮箱格式“像真人”的程度
-        prefix = "".join(random.choices(string.ascii_lowercase, k=6))
-        suffix = "".join(random.choices(string.digits, k=4))
-        return f"{prefix}{suffix}"
+        # 避免纯数字开头，提高邮箱格式"像真人"的程度
+        first = random.choice(string.ascii_lowercase)
+        rest = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+        return first + rest
 
     @staticmethod
     def _normalize_domain(domain: Any) -> str:
