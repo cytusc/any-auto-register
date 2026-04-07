@@ -2464,7 +2464,7 @@ class CFWorkerMailbox(BaseMailbox):
     def get_email(self) -> MailboxAccount:
         self._ensure_api_configured()
         name = self._generate_local_part()
-        payload = {"enablePrefix": True, "name": name}
+        payload = {"enablePrefix": False, "name": name}
         selected_domain = self._compose_domain(self._pick_domain())
         if selected_domain:
             payload["domain"] = selected_domain
